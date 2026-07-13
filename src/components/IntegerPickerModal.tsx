@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useTheme } from '@/theme/ThemeContext';
 import { BottomSheet } from './BottomSheet';
 import { Button } from './Button';
@@ -8,13 +8,12 @@ interface IntegerPickerModalProps {
   visible: boolean;
   title: string;
   subtitle?: string;
-  initialValue: number;
+  initialValue: number | null;
   centerValue: number;
   chipOffsets?: number[];
   min?: number;
   formatValue?: (v: number) => string;
   allowClear?: boolean;
-  allowTextInput?: boolean;
   onClose: () => void;
   onSubmit: (value: number | null) => void;
 }
@@ -31,16 +30,29 @@ export function IntegerPickerModal({
   min,
   formatValue = (v) => String(v),
   allowClear,
-  allowTextInput,
   onClose,
   onSubmit,
 }: IntegerPickerModalProps) {
   const { theme } = useTheme();
-  const [value, setValue] = useState(initialValue);
+  const [value, setValue] = useState<number | null>(initialValue);
+  const [typing, setTyping] = useState(false);
+  const [rawText, setRawText] = useState('');
+  const inputRef = useRef<TextInput>(null);
 
   useEffect(() => {
-    if (visible) setValue(initialValue);
+    if (visible) {
+      setValue(initialValue);
+      setTyping(false);
+      setRawText('');
+    }
   }, [visible, initialValue]);
+
+  useEffect(() => {
+    if (typing) {
+      const t = setTimeout(() => inputRef.current?.focus(), 50);
+      return () => clearTimeout(t);
+    }
+  }, [typing]);
 
   const clamp = (v: number) => (min != null ? Math.max(min, v) : v);
 
@@ -49,9 +61,34 @@ export function IntegerPickerModal({
     onClose();
   };
 
+  const stepUp = () => {
+    setTyping(false);
+    setValue((v) => clamp((v ?? centerValue) + 1));
+  };
+
+  const stepDown = () => {
+    setTyping(false);
+    setValue((v) => clamp((v ?? centerValue) - 1));
+  };
+
+  const openKeyboard = () => {
+    setRawText(value != null ? String(value) : '');
+    setTyping(true);
+  };
+
+  const handleTextChange = (t: string) => {
+    const cleaned = t.replace(/[^0-9-]/g, '');
+    setRawText(cleaned);
+    const n = parseInt(cleaned, 10);
+    if (!Number.isNaN(n)) setValue(clamp(n));
+  };
+
   const chips = chipOffsets
     .map((offset) => centerValue + offset)
     .filter((v) => min == null || v >= min);
+
+  // Use a more permissive keyboard when negative values are allowed
+  const keyboardType = min != null && min < 0 ? 'numbers-and-punctuation' : 'number-pad';
 
   return (
     <BottomSheet visible={visible} onClose={onClose}>
@@ -59,21 +96,27 @@ export function IntegerPickerModal({
       {subtitle ? <Text style={[styles.subtitle, { color: theme.textMuted }]}>{subtitle}</Text> : null}
 
       <View style={styles.stepperRow}>
-        <Button title="–" variant="outline" onPress={() => setValue((v) => clamp(v - 1))} style={styles.stepperBtn} />
-        {allowTextInput ? (
+        <Button title="–" variant="outline" onPress={stepDown} style={styles.stepperBtn} />
+
+        {typing ? (
           <TextInput
-            style={[styles.valueInput, { color: theme.text, borderColor: theme.border }]}
-            keyboardType="number-pad"
-            value={String(value)}
-            onChangeText={(t) => {
-              const n = parseInt(t.replace(/[^0-9-]/g, ''), 10);
-              setValue(clamp(Number.isNaN(n) ? 0 : n));
-            }}
+            ref={inputRef}
+            style={[styles.valueInput, { color: theme.text, borderColor: theme.accent }]}
+            keyboardType={keyboardType}
+            value={rawText}
+            onChangeText={handleTextChange}
+            onBlur={() => setTyping(false)}
+            selectTextOnFocus
           />
         ) : (
-          <Text style={[styles.value, { color: theme.text }]}>{formatValue(value)}</Text>
+          <Pressable onPress={openKeyboard} style={styles.valueDisplay} hitSlop={8}>
+            <Text style={[styles.value, { color: value == null ? theme.textMuted : theme.text }]}>
+              {value == null ? '–' : formatValue(value)}
+            </Text>
+          </Pressable>
         )}
-        <Button title="+" variant="outline" onPress={() => setValue((v) => clamp(v + 1))} style={styles.stepperBtn} />
+
+        <Button title="+" variant="outline" onPress={stepUp} style={styles.stepperBtn} />
       </View>
 
       <View style={styles.chipRow}>
@@ -116,10 +159,13 @@ const styles = StyleSheet.create({
     width: 48,
     paddingHorizontal: 0,
   },
+  valueDisplay: {
+    minWidth: 80,
+    alignItems: 'center',
+  },
   value: {
     fontSize: 40,
     fontWeight: '700',
-    minWidth: 80,
     textAlign: 'center',
   },
   valueInput: {
@@ -127,7 +173,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     minWidth: 90,
     textAlign: 'center',
-    borderBottomWidth: 1.5,
+    borderBottomWidth: 2,
     paddingVertical: 2,
   },
   chipRow: {

@@ -1,4 +1,5 @@
 import React from 'react';
+import { View } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -11,7 +12,7 @@ function RootStack() {
   const { theme, isDark } = useTheme();
 
   return (
-    <>
+    <View style={{ flex: 1, backgroundColor: theme.background }}>
       <StatusBar style={isDark ? 'light' : 'dark'} />
       <Stack
         screenOptions={{
@@ -29,7 +30,7 @@ function RootStack() {
         <Stack.Screen name="game/[id]/edit" options={{ title: 'Edit Game', presentation: 'modal' }} />
         <Stack.Screen name="players" options={{ title: 'Players' }} />
       </Stack>
-    </>
+    </View>
   );
 }
 

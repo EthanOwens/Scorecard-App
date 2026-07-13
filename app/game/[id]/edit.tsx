@@ -148,12 +148,11 @@ export default function EditGameScreen() {
         <IntegerPickerModal
           visible
           title={`Handicap — ${editHandicapPlayer.name}`}
-          initialValue={editHandicapPlayer.handicap ?? 0}
+          initialValue={editHandicapPlayer.handicap ?? null}
           centerValue={18}
           chipOffsets={[-18, -9, 0, 9, 18]}
           min={0}
           allowClear
-          allowTextInput
           onClose={() => setEditHandicapPlayerId(null)}
           onSubmit={(v) => {
             setPlayerHandicap(game.id, editHandicapPlayer.id, v ?? undefined);

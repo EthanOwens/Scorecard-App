@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { useColorScheme } from 'react-native';
+import { Appearance, useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AccentKey, DEFAULT_ACCENT, Theme, buildTheme } from './colors';
 
@@ -19,7 +19,7 @@ interface ThemeContextValue {
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const systemScheme = useColorScheme();
+  const systemScheme = useColorScheme() ?? Appearance.getColorScheme();
   const [mode, setModeState] = useState<ThemeMode>('system');
   const [accentKey, setAccentKeyState] = useState<AccentKey>(DEFAULT_ACCENT);
   const [loaded, setLoaded] = useState(false);

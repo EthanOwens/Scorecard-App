@@ -25,8 +25,8 @@ export default function NewGameScreen() {
   const { theme } = useTheme();
   const router = useRouter();
   const { createGame } = useGameStore();
-  const { courses, findCourseByName } = useCourseStore();
-  const { profiles } = usePlayerStore();
+  const { courses, findCourseByName, upsertCourse } = useCourseStore();
+  const { profiles, createProfile } = usePlayerStore();
 
   const [typeId, setTypeId] = useState<string>('golf');
   const [usesPar, setUsesPar] = useState(false);
@@ -35,6 +35,8 @@ export default function NewGameScreen() {
   const [name, setName] = useState('');
   const [courseName, setCourseName] = useState('');
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
+  // Track which player field is focused for autocomplete
+  const [focusedPlayerIdx, setFocusedPlayerIdx] = useState<number | null>(null);
 
   const preset = useMemo(() => getGameType(typeId), [typeId]);
   const effectiveUsesPar = preset.parConfigurable ? usesPar : preset.usesPar;
@@ -57,13 +59,15 @@ export default function NewGameScreen() {
 
   const updateCourseName = (text: string) => {
     setCourseName(text);
-    const selected = selectedCourseId ? courses.find((c) => c.id === selectedCourseId) : undefined;
-    if (selected && selected.name.trim().toLowerCase() !== text.trim().toLowerCase()) {
-      setSelectedCourseId(null);
+    if (selectedCourseId) {
+      const sel = courses.find((c) => c.id === selectedCourseId);
+      if (sel && sel.name.trim().toLowerCase() !== text.trim().toLowerCase()) {
+        setSelectedCourseId(null);
+      }
     }
   };
 
-  const selectCourseChip = (courseId: string) => {
+  const selectCourse = (courseId: string) => {
     const course = courses.find((c) => c.id === courseId);
     if (!course) return;
     setCourseName(course.name);
@@ -71,21 +75,45 @@ export default function NewGameScreen() {
     setNumRounds(course.pars.length);
   };
 
+  // Filtered course suggestions while typing (empty field shows nothing)
+  const courseSuggestions = useMemo(() => {
+    const q = courseName.trim().toLowerCase();
+    if (!q) return [];
+    return courses.filter((c) => c.name.toLowerCase().includes(q));
+  }, [courseName, courses]);
+
+  // Hide suggestions when already exactly matching the selected course
+  const showCourseSuggestions =
+    courses.length > 0 &&
+    !(selectedCourseId && courses.find((c) => c.id === selectedCourseId)?.name.toLowerCase() === courseName.trim().toLowerCase());
+
   const updatePlayer = (index: number, patch: Partial<PlayerDraft>) =>
     setPlayers((prev) => prev.map((p, i) => (i === index ? { ...p, ...patch } : p)));
 
   const addPlayerField = () => setPlayers((prev) => [...prev, { ...BLANK_PLAYER }]);
 
-  const removePlayerField = (index: number) =>
+  const removePlayerField = (index: number) => {
     setPlayers((prev) => prev.filter((_, i) => i !== index));
+    if (focusedPlayerIdx === index) setFocusedPlayerIdx(null);
+  };
 
-  const addProfilePlayer = (profileId: string) => {
+  const selectProfileForPlayer = (index: number, profileId: string) => {
     const profile = profiles.find((p) => p.id === profileId);
     if (!profile) return;
-    setPlayers((prev) => [...prev, { name: profile.name, handicap: '', profileId: profile.id }]);
+    updatePlayer(index, { name: profile.name, profileId: profile.id });
+    setFocusedPlayerIdx(null);
   };
 
   const addedProfileIds = new Set(players.map((p) => p.profileId).filter(Boolean));
+
+  // Filtered profile suggestions for a player field
+  const profileSuggestionsFor = (index: number) => {
+    const q = players[index]?.name.trim().toLowerCase() ?? '';
+    if (!q) return profiles.filter((p) => !addedProfileIds.has(p.id));
+    return profiles.filter(
+      (p) => p.name.toLowerCase().includes(q) && !addedProfileIds.has(p.id)
+    );
+  };
 
   const canCreate = players.some((p) => p.name.trim().length > 0);
 
@@ -94,7 +122,17 @@ export default function NewGameScreen() {
     if (finalDrafts.length === 0) return;
 
     const finalNames = finalDrafts.map((p) => p.name.trim());
-    const finalProfileIds = finalDrafts.map((p) => p.profileId);
+
+    // Auto-create a profile for any player not already linked to one
+    const resolvedProfileIds = finalDrafts.map((draft) => {
+      if (draft.profileId) return draft.profileId;
+      const existing = profiles.find(
+        (p) => p.name.trim().toLowerCase() === draft.name.trim().toLowerCase()
+      );
+      if (existing) return existing.id;
+      return createProfile(draft.name.trim()).id;
+    });
+
     const finalHandicaps = effectiveUsesPar
       ? finalDrafts.map((p) => {
           const n = parseInt(p.handicap, 10);
@@ -113,6 +151,11 @@ export default function NewGameScreen() {
       if (matched) pars = adjustPars(matched.pars, numRounds);
     }
 
+    // Auto-save course name so it appears in future autocomplete
+    if (trimmedCourseName) {
+      upsertCourse(trimmedCourseName, pars ?? new Array(numRounds).fill(null));
+    }
+
     const game = createGame({
       typeId: preset.id,
       typeLabel: preset.label,
@@ -123,7 +166,7 @@ export default function NewGameScreen() {
       defaultPar: preset.defaultPar,
       numRounds,
       playerNames: finalNames,
-      playerProfileIds: finalProfileIds,
+      playerProfileIds: resolvedProfileIds,
       playerHandicaps: finalHandicaps,
       name: finalName,
       courseName: trimmedCourseName || undefined,
@@ -138,7 +181,7 @@ export default function NewGameScreen() {
       style={{ backgroundColor: theme.background }}
       contentContainerStyle={styles.content}
       enableOnAndroid
-      extraScrollHeight={24}
+      extraScrollHeight={140}
       keyboardShouldPersistTaps="handled"
     >
       <Text style={[styles.sectionTitle, { color: theme.textMuted }]}>Game Type</Text>
@@ -193,7 +236,9 @@ export default function NewGameScreen() {
                 },
               ]}
             >
-              <Text style={{ color: selected ? theme.accent : theme.text, fontWeight: '600' }}>{opt}</Text>
+              <Text style={{ color: selected ? theme.accent : theme.text, fontWeight: '600' }}>
+                {opt}
+              </Text>
             </Pressable>
           );
         })}
@@ -205,118 +250,142 @@ export default function NewGameScreen() {
             Course (optional)
           </Text>
           <TextInput
-            style={[styles.nameInput, { color: theme.text, borderColor: theme.border, backgroundColor: theme.surface }]}
+            style={[
+              styles.nameInput,
+              { color: theme.text, borderColor: theme.border, backgroundColor: theme.surface },
+            ]}
             placeholder="Course name"
             placeholderTextColor={theme.textMuted}
             value={courseName}
             onChangeText={updateCourseName}
           />
-          {courses.length > 0 && (
-            <View style={styles.chipRow}>
-              {courses.map((c) => {
-                const selected = c.id === selectedCourseId;
-                return (
-                  <Pressable
-                    key={c.id}
-                    onPress={() => selectCourseChip(c.id)}
-                    style={[
-                      styles.chip,
-                      {
-                        borderColor: selected ? theme.accent : theme.border,
-                        backgroundColor: selected ? theme.accentSoft : theme.surface,
-                      },
-                    ]}
-                  >
-                    <Text style={{ color: selected ? theme.accent : theme.text, fontSize: 13, fontWeight: '600' }}>
-                      {c.name}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+          {showCourseSuggestions && courseSuggestions.length > 0 && (
+            <Card style={styles.suggestionBox}>
+              {courseSuggestions.slice(0, 5).map((c, i) => (
+                <Pressable
+                  key={c.id}
+                  onPress={() => selectCourse(c.id)}
+                  style={[
+                    styles.suggestionItem,
+                    i < Math.min(courseSuggestions.length, 5) - 1 && {
+                      borderBottomWidth: 1,
+                      borderBottomColor: theme.border,
+                    },
+                  ]}
+                >
+                  <Text style={{ color: theme.text, fontSize: 14 }}>{c.name}</Text>
+                  <Text style={{ color: theme.textMuted, fontSize: 12 }}>
+                    {c.pars.length} holes
+                  </Text>
+                </Pressable>
+              ))}
+            </Card>
           )}
         </>
       )}
 
       <Text style={[styles.sectionTitle, { color: theme.textMuted, marginTop: 24 }]}>Players</Text>
-
-      {profiles.length > 0 && (
-        <View style={styles.chipRow}>
-          {profiles.map((profile) => {
-            const alreadyAdded = addedProfileIds.has(profile.id);
-            return (
-              <Pressable
-                key={profile.id}
-                onPress={() => !alreadyAdded && addProfilePlayer(profile.id)}
-                style={[
-                  styles.chip,
-                  {
-                    borderColor: alreadyAdded ? theme.accent : theme.border,
-                    backgroundColor: alreadyAdded ? theme.accentSoft : theme.surface,
-                    opacity: alreadyAdded ? 0.5 : 1,
-                  },
-                ]}
-              >
-                <Text style={{ color: alreadyAdded ? theme.accent : theme.text, fontSize: 13, fontWeight: '600' }}>
-                  {alreadyAdded ? '✓ ' : '+ '}{profile.name}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      )}
-
-      <Card style={{ marginTop: profiles.length > 0 ? 10 : 0 }}>
+      <Card>
         {players.map((player, index) => (
-          <View key={index} style={styles.playerRow}>
-            <TextInput
-              style={[styles.playerInput, { color: theme.text, borderColor: theme.border }]}
-              placeholder={`Player ${index + 1}`}
-              placeholderTextColor={theme.textMuted}
-              value={player.name}
-              onChangeText={(t) => updatePlayer(index, { name: t, profileId: player.profileId })}
-            />
-            {effectiveUsesPar && (
+          <View key={index}>
+            <View style={styles.playerRow}>
               <TextInput
-                style={[styles.handicapInput, { color: theme.text, borderColor: theme.border }]}
-                placeholder="HCP"
+                style={[styles.playerInput, { color: theme.text, borderColor: theme.border }]}
+                placeholder={`Player ${index + 1}`}
                 placeholderTextColor={theme.textMuted}
-                keyboardType="number-pad"
-                value={player.handicap}
-                onChangeText={(t) => updatePlayer(index, { handicap: t.replace(/[^0-9]/g, '') })}
+                value={player.name}
+                onFocus={() => setFocusedPlayerIdx(index)}
+                onChangeText={(t) => updatePlayer(index, { name: t, profileId: undefined })}
               />
-            )}
-            {players.length > 1 && (
-              <Pressable onPress={() => removePlayerField(index)} hitSlop={8} style={styles.removeBtn}>
-                <Text style={{ color: theme.textMuted, fontSize: 18 }}>×</Text>
-              </Pressable>
+              {effectiveUsesPar && (
+                <TextInput
+                  style={[styles.handicapInput, { color: theme.text, borderColor: theme.border }]}
+                  placeholder="HCP"
+                  placeholderTextColor={theme.textMuted}
+                  keyboardType="number-pad"
+                  value={player.handicap}
+                  onChangeText={(t) => updatePlayer(index, { handicap: t.replace(/[^0-9]/g, '') })}
+                />
+              )}
+              {players.length > 1 && (
+                <Pressable
+                  onPress={() => removePlayerField(index)}
+                  hitSlop={8}
+                  style={styles.removeBtn}
+                >
+                  <Text style={{ color: theme.textMuted, fontSize: 18 }}>×</Text>
+                </Pressable>
+              )}
+            </View>
+
+            {/* Profile autocomplete for this player field */}
+            {focusedPlayerIdx === index && profiles.length > 0 && (
+              <View style={styles.playerSuggestions}>
+                {profileSuggestionsFor(index).slice(0, 4).map((p, si) => {
+                  const list = profileSuggestionsFor(index);
+                  return (
+                    <Pressable
+                      key={p.id}
+                      onPress={() => selectProfileForPlayer(index, p.id)}
+                      style={[
+                        styles.playerSuggestionItem,
+                        {
+                          borderColor: theme.border,
+                          backgroundColor: theme.surfaceAlt,
+                        },
+                        si < Math.min(list.length, 4) - 1 && {
+                          borderBottomWidth: 1,
+                          borderBottomColor: theme.border,
+                        },
+                      ]}
+                    >
+                      <Text style={{ color: theme.text, fontSize: 13, fontWeight: '600' }}>
+                        {p.name}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
             )}
           </View>
         ))}
-        <Button title="+ Add Player" variant="ghost" onPress={addPlayerField} />
+        <Button
+          title="+ Add Player"
+          variant="ghost"
+          onPress={() => {
+            addPlayerField();
+            setFocusedPlayerIdx(players.length);
+          }}
+        />
       </Card>
 
       <Text style={[styles.sectionTitle, { color: theme.textMuted, marginTop: 24 }]}>
         Game Name (optional)
       </Text>
       <TextInput
-        style={[styles.nameInput, { color: theme.text, borderColor: theme.border, backgroundColor: theme.surface }]}
+        style={[
+          styles.nameInput,
+          { color: theme.text, borderColor: theme.border, backgroundColor: theme.surface },
+        ]}
         placeholder={`${preset.label} — ${new Date().toLocaleDateString()}`}
         placeholderTextColor={theme.textMuted}
         value={name}
         onChangeText={setName}
+        onFocus={() => setFocusedPlayerIdx(null)}
       />
 
-      <Button title="Create Game" onPress={handleCreate} disabled={!canCreate} style={{ marginTop: 28 }} />
+      <Button
+        title="Create Game"
+        onPress={handleCreate}
+        disabled={!canCreate}
+        style={{ marginTop: 28 }}
+      />
     </KeyboardAwareScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  content: {
-    padding: 16,
-    paddingBottom: 40,
-  },
+  content: { padding: 16, paddingBottom: 40 },
   sectionTitle: {
     fontSize: 13,
     fontWeight: '700',
@@ -324,43 +393,24 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     marginBottom: 8,
   },
-  typeRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  typeCardWrap: {
-    flex: 1,
-  },
-  typeCard: {
-    alignItems: 'center',
-    paddingVertical: 18,
-  },
-  typeLabel: {
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  pillRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
+  typeRow: { flexDirection: 'row', gap: 10 },
+  typeCardWrap: { flex: 1 },
+  typeCard: { alignItems: 'center', paddingVertical: 18 },
+  typeLabel: { fontSize: 15, fontWeight: '700' },
+  pillRow: { flexDirection: 'row', gap: 10 },
   pill: {
     borderWidth: 1.5,
     borderRadius: 10,
     paddingVertical: 10,
     paddingHorizontal: 18,
   },
-  chipRow: {
+  suggestionBox: { marginTop: 4 },
+  suggestionItem: {
+    paddingVertical: 10,
+    paddingHorizontal: 4,
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 10,
-    marginBottom: 4,
-  },
-  chip: {
-    borderWidth: 1.5,
-    borderRadius: 8,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   playerRow: {
     flexDirection: 'row',
@@ -385,8 +435,17 @@ const styles = StyleSheet.create({
     fontSize: 15,
     textAlign: 'center',
   },
-  removeBtn: {
-    paddingHorizontal: 4,
+  removeBtn: { paddingHorizontal: 4 },
+  playerSuggestions: {
+    marginTop: -6,
+    marginBottom: 8,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  playerSuggestionItem: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 0,
   },
   nameInput: {
     borderWidth: 1,
